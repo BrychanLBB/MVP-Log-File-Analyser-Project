@@ -4,54 +4,60 @@ from collections import defaultdict
 def loadCSV(filename): #Opens the test csv and loads it into a DataFrame
     
     df = pd.read_csv(filename)
+    df["timestamp"] = pd.to_datetime(df["timestamp"], format="%d/%b/%Y:%H:%M:%S", errors="coerce") #turns the timestamp column into a datetime object
+    df = df.dropna(subset=["timestamp"]) #drops rows that cant be parsed
+    df["status"] = df["status"].astype(int) #converts the status column into ints
+    
+    df.set_index("timestamp", inplace=True) #sets the index as the timestamp to measure time between requests
 
     return df
 
 def analyseData(df):
 
-    failed_attempts = defaultdict(int)
-    not_found_attempts = defaultdict(int)
-    total_attempts = defaultdict(int)
+    alerts = []
 
-    for _, row in df.iterrows():
+    for ip, group in df.groupby("ip"): #groups the datafram on ip addresses
+        
+        per_minute = group.resample("1Min") #resamples the data for each ip address into 1 minute intervals
 
-        ip = row["ip"]
-        status = int(row["status"])
+        counts = per_minute["status"].value_counts().unstack(fill_value=0) #counts the occurences of each code per minute assigning a 0 to minutes that no code occured
 
-        total_attempts[ip] += 1
+       
 
-        if status in [401, 403]:
+        for time, row in counts.iterrows():
+                
+            total_requests = row.sum()
+            failed_logins = row.get(401, 0) + row.get(403, 0)
+            not_found = row.get(404, 0)
 
-            failed_attempts[ip] += 1
+                # Apply thresholds
+            if failed_logins > 5:
+                alerts.append(f"[!] {ip} - {failed_logins} failed logins at {time} (possible brute force)")
 
-        elif status == 404:
+            if not_found > 10:
+                alerts.append(f"[!] {ip} - {not_found} 404 errors at {time} (possible scanning)")
 
-            not_found_attempts[ip] += 1
+            if total_requests > 100:
+                alerts.append(f"[!] {ip} - {total_requests} requests at {time} (possible DoS/scraping)")
 
-    return failed_attempts, not_found_attempts, total_attempts
+    return alerts
 
-
-def createReport(failed, not_found, total):
+def createReport(alerts):
 
     print("=== SUSPICIOUS ACTIVITY ===")
 
-    for ip in total:
-
-        if failed[ip] >= 5:
-            print(f"[!] {ip} - {failed[ip]} failed login attempts")
-        
-        elif not_found[ip] >= 10:
-            print(f"[!] {ip} - {not_found[ip]} 404 errors - (potential scanning)")
-
-        elif total[ip] >= 100:
-            print(f"[!] {ip} - {total[ip]} total requests - (possible brute force)")
+    if not alerts:
+        print("No suspicious activity detected")
+    else:
+        for alert in alerts:
+            print(alert)
 
 
-df = loadCSV("MVP-Log-File-Analyzer-Project/test_logs_attack_heavy.csv")
+df = loadCSV("MVP-Log-File-Analyzer-Project/test_logs.csv")
 
-failed_attempts, not_found_attempts, total_attempts = analyseData(df)
+alerts = analyseData(df)
 
-createReport(failed_attempts, not_found_attempts, total_attempts)
+createReport(alerts)
 
 
     
